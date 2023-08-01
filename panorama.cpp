@@ -2,11 +2,17 @@
 #include <math.h>
 #include <algorithm>
 #include <string>
-#include <unistd.h>
+#include <cmath>
 
-// CImg library
-#include "CImg/CImg.h"
-using namespace cimg_library;
+#include "opencv2/opencv.hpp"
+using namespace cv;
+
+// getopt license doesn't permit static link
+#include "getopt.h"
+
+#ifndef _WIN32
+#include <unistd.h>
+#endif
 
 //#include <xmmintrin.h>
 //#include <pmmintrin.h>
@@ -15,6 +21,14 @@ using namespace cimg_library;
 #include <tbb/parallel_for.h>
 #include <tbb/blocked_range.h>
 using namespace tbb;
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
+#ifndef M_PI_2
+#define M_PI_2 1.57079632679489661923
+#endif
 
 // Input parameters
 int iflag, oflag, hflag, rflag;
@@ -99,12 +113,14 @@ struct PixelRange {int start, end; };
  **	face is face number
  **	edge is edge length
  **/
-Vec3fa outImgToXYZ(int, int, int, int);
-Vec3uc interpolateXYZtoColor(Vec3fa, CImg<unsigned char>&);
+Vec3f outImgToXYZ(int, int, int, int);
+Vec3b interpolateXYZtoColor(Vec3f xyz, const Mat& imgIn);
+
+void convertBack(Mat& imgIn, std::vector<Mat>& imgOut);
+
 /**
  **	Convert panorama using an inverse pixel transformation
  **/
-void convertBack(CImg<unsigned char>&, CImg<unsigned char> **);
 
 int main (int argc, char *argv[]) {
     std::cout << "PeakVisor panorama translator...\n";
@@ -113,61 +129,65 @@ int main (int argc, char *argv[]) {
     
     std::cout << "  convert equirectangular panorama: [" << ivalue << "] into cube faces: ["<< ovalue << "] of " << rvalue <<" pixels in dimension\n";
     
-    // Input image
-    CImg<unsigned char> imgIn(ivalue);
+	// Input image
+	auto imgIn = imread(ivalue);
+	if (imgIn.empty() ) {
+		std::cerr << "Error: Could not open the input image: " << ivalue << std::endl;
+		return 1;
+	}
     
     // Create output images
-    CImg<unsigned char>* imgOut[6];
-    for (int i=0; i<6; ++i){
-        imgOut[i] = new CImg<unsigned char>(rvalue, rvalue, 1, 4, 255);
-    }
-    
+	std::vector < Mat> imgOut;
+	imgOut.resize(6);
+
+	for (auto &u : imgOut) {
+		u = cv::Mat(imgIn.cols / 6, imgIn.cols / 6, CV_8UC3);
+
+		u.setTo(cv::Scalar(255, 0, 0)); // Blue color (BGR order)
+
+	}
+
     // Convert panorama
-    convertBack(imgIn, imgOut);
+    convertBack(imgIn,imgOut);
     
     // Write output images
     for (int i=0; i<6; ++i){
-        std::string fname = std::string(ovalue) + "_" + std::to_string(i) + ".jpg";//".jpg";
-        imgOut[i]->save_jpeg( fname.c_str(), 85);
-//        imgOut[i]->save_png(fname.c_str());
+        std::string fname = std::string(ovalue) + "_" + std::to_string(i) + ".jpg";
+		imwrite(fname.c_str(), imgOut[i]);
     }
     
-    std::cout << "  convertation finished successfully\n";
+    std::cout << "  conversion finished successfully\n";
+
     return 0;
 }
-
-
 
 /**
  **	Convert panorama using an inverse pixel transformation
  **/
-void convertBack(CImg<unsigned char>& imgIn, CImg<unsigned char> **imgOut){
-    int _dw = rvalue*6;
-    int edge = rvalue; // the length of each edge in pixels
 
-    // Look around cube faces
-    tbb::parallel_for(blocked_range<size_t>(0, _dw, 1),
-                              [&](const blocked_range<size_t>& range) {
-        for (size_t k=range.begin(); k<range.end(); ++k) {
-            int face = int(k / edge); // 0 - back, 1 - left 2 - front, 3 - right, 4 - top, 5 - bottom
-            int i = int(k % edge);
+void convertBack(Mat& imgIn, std::vector<Mat>& imgOut) {
+	int rvalue = imgIn.cols / 6; // Assuming the input cube map is divided equally into six faces
+	int edge = rvalue; // the length of each edge in pixels
 
-	    for (int j=0; j<edge; ++j) {
-                Vec3fa xyz = outImgToXYZ(i, j, face, edge);
-                Vec3uc clr = interpolateXYZtoColor(xyz, imgIn);
-                const unsigned char color[] = { clr.x, clr.y, clr.z, 255 };
-                imgOut[face]->draw_point(i, j, 0, color);
-            }
-       }
-    });
+	// Look around cube faces
+	for (int face = 0; face < 6; ++face) {
+		for (int i = 0; i < edge; ++i) {
+			for (int j = 0; j < edge; ++j) {
+				Vec3f xyz = outImgToXYZ(i, j, face, edge); // Assuming outImgToXYZ returns a Vec3f
+				Vec3b clr = interpolateXYZtoColor(xyz, imgIn); // Assuming interpolateXYZtoColor returns a Vec3b
+				imgOut[face].at<Vec3b>(j, i) = clr;
+			}
+		}
+	}
 }
 
 // Given i,j pixel coordinates on a given face in range (0,edge), 
 // find the corresponding x,y,z coords in range (-1.0,1.0)
-Vec3fa outImgToXYZ(int i, int j, int face, int edge) {
+Vec3f outImgToXYZ(int i, int j, int face, int edge) {
+
     float a = (2.0f*i)/edge - 1.0f;
     float b = (2.0f*j)/edge - 1.0f;
-    Vec3fa res;
+    Vec3f res;
     if (face==0) { // back
         res = {-1.0f, -a, -b};
     } else if (face==1) { // left
@@ -202,28 +222,32 @@ static inline T mix(const T &one, const T &other, const Scalar &c) {
     return one + (other - one) * c;
 }
 
-Vec3uc interpolateXYZtoColor(Vec3fa xyz, CImg<unsigned char>& imgIn) {
-    auto _sw = imgIn.width(), _sh = imgIn.height();
-    
-    auto theta = std::atan2(xyz.y, xyz.x), r = std::hypot(xyz.x, xyz.y);// # range -pi to pi
-    auto phi = std::atan2(xyz.z, r);// # range -pi/2 to pi/2
-    
-    // source img coords
-    auto uf = (theta + M_PI) / M_PI * _sh;
-    auto vf = (M_PI_2 - phi) / M_PI * _sh; // implicit assumption: _sh == _sw / 2
-    // Use bilinear interpolation between the four surrounding pixels
-    auto ui = safeIndex(static_cast<int>(std::floor(uf)), _sw);
-    auto vi = safeIndex(static_cast<int>(std::floor(vf)), _sh);  //# coord of pixel to bottom left
-    auto u2 = safeIndex(ui + 1, _sw);
-    auto v2 = safeIndex(vi + 1, _sh);       //# coords of pixel to top right
-    double mu = uf - ui, nu = vf - vi;      //# fraction of way across pixel
-    mu = nu = 0;
-    
-    // Pixel values of four nearest corners
-    auto read = [&](int x, int y) { return Vec3fa{Vec3uc{*imgIn.data(x, y, 0, 0), *imgIn.data(x, y, 0, 1), *imgIn.data(x, y, 0, 2)}}; };
-    auto A = read(ui, vi), B = read(u2, vi), C = read(ui, v2), D = read(u2, v2);
-    
-    // Interpolate color
-    auto value = mix(mix(A, B, mu), mix(C, D, mu), nu);
-    return Vec3uc{value};
+cv::Vec3b interpolateXYZtoColor(cv::Vec3f xyz, const cv::Mat& imgIn)
+{
+	int _sw = imgIn.cols, _sh = imgIn.rows;
+
+	auto theta = std::atan2(xyz[1], xyz[0]), r = std::hypot(xyz[0], xyz[1]);
+	auto phi = std::atan2(xyz[2], r);
+
+	auto uf = (theta + CV_PI) / CV_PI * _sh;
+	auto vf = (CV_PI / 2 - phi) / CV_PI * _sh;
+
+	int ui = std::clamp(static_cast<int>(std::floor(uf)), 0, _sw - 1);
+	int vi = std::clamp(static_cast<int>(std::floor(vf)), 0, _sh - 1);
+	int u2 = std::clamp(ui + 1, 0, _sw - 1);
+	int v2 = std::clamp(vi + 1, 0, _sh - 1);
+
+	double mu = uf - ui, nu = vf - vi;
+	mu = nu = 0; // Note: This line resets mu and nu to 0, effectively disabling interpolation.
+
+	auto A = imgIn.at<cv::Vec3b>(vi, ui);
+	auto B = imgIn.at<cv::Vec3b>(vi, u2);
+	auto C = imgIn.at<cv::Vec3b>(v2, ui);
+	auto D = imgIn.at<cv::Vec3b>(v2, u2);
+
+	cv::Vec3b value;
+	for (int i = 0; i < 3; i++) {
+		value[i] = (1 - nu) * ((1 - mu) * A[i] + mu * B[i]) + nu * ((1 - mu) * C[i] + mu * D[i]);
+	}
+	return value;
 }
