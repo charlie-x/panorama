@@ -29,7 +29,13 @@ Obviously, it decreases the panorama's quality and you'd better avoid this trans
 
 The program requires the Intel [Threading Building Blocks](https://www.threadingbuildingblocks.org/) (TBB), [libpng](http://www.libpng.org/pub/png/libpng.html), xorg-dev, and [libjpeg](http://libjpeg.sourceforge.net/) libaries.
 
-On ubuntu these can be installed with 
+On Windows with Visual Studio
+
+```
+install vcpkg, integrate and open with VC2002, and then select build
+```
+
+On ubuntu these can be installed with  (I haven't updated the Makefile for linux)
 ```
 sudo apt-get install libtbb-dev libpng-dev libjpeg-dev xorg-dev
 ```
