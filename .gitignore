@@ -29,8 +29,12 @@ photo
 *.exe
 *.out
 *.app
-panorama
+
 
 # Test images
 *.jpg
 *.png
+/panorama/vcpkg_installed
+/panorama/x64
+/panorama/Thumbs.db
+/panorama/.vs/panorama

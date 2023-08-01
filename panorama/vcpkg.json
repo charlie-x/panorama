@@ -1,0 +1,8 @@
+{
+  "name": "panorama",
+  "dependencies": [
+    "tbb",
+    "getopt",
+    "opencv"
+  ]
+}
